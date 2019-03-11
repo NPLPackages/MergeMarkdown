@@ -22,3 +22,9 @@ local MergeMarkdown = NPL.load("MergeMarkdown");
 -- example 1:
 local mmd = MergeMarkdown:new():Init("https://keepwork.com/lixizhi/lessons/books/paracraft01")
 ```
+
+## Examples:
+Please note, `keepwork.com` url is supported. If your file is not on keepwork, it has to ends with `*.md`
+
+- https://keepwork.com/lixizhi/lessons/books/paracraft01
+- https://keepwork.com/lixizhi/lessons/books/paracraft_preview_gen
