@@ -44,8 +44,9 @@ function MergeMarkdown:Init(root_url)
 end
 
 -- @param address: like "/lixizhi/lessons/books/paracraft" or "https://keepwork.com/lixizhi/lessons/books/paracraft"
+-- @param repoPrefix: default to "", it can also be "keepwork" for older project. 
 -- if it ends with ".md", we will use address as download url instead.  
-function MergeMarkdown:GetRawUrlFromAddress(address)
+function MergeMarkdown:GetRawUrlFromAddress(address, repoPrefix)
     if(address:match("%.md$")) then
         return address;
     end
@@ -54,23 +55,24 @@ function MergeMarkdown:GetRawUrlFromAddress(address)
     local userName, webName = address:match("^/([^/]+)/([^/]+)");
     if (userName and webName)  then
         -- https://git.keepwork.com/gitlab_rls_lixizhi/keepworklessons/raw/master/lixizhi/lessons/books/6_future_edu.md
-        local url = format("https://git.keepwork.com/gitlab_rls_%s/keepwork%s/raw/master%s.md", userName, webName, address)
+        local url = format("https://git.keepwork.com/gitlab_rls_%s/%s%s/raw/master%s.md", userName, repoPrefix or "", webName, address)
 		return url;
     end
 	return address;
 end
 
 -- @param address: url or file 
+-- @param repoPrefix: default to "", it can also be "keepwork" for older project. 
 -- return text or nil
-function MergeMarkdown:GetWikiContent(address)
-	local url = self:GetRawUrlFromAddress(address);
+function MergeMarkdown:GetWikiContent(address, repoPrefix)
+	local url = self:GetRawUrlFromAddress(address, repoPrefix);
 	if(url:match("^http")) then
 		LOG.std(nil, "info", "MergeMarkdown", "fetching %s", url)
 		System.os.GetUrl(url, function(err, msg, data)
 			if(err == 200) then
 				coroutine.resume(self.co, nil, data);
 			else
-				LOG.std(nil, "error", "MergeMarkdown", "%s failed with %d", address, err)
+				LOG.std(nil, "warn", "MergeMarkdown", "%s failed with %d", url, err)
 				coroutine.resume(self.co, nil);
 			end
 		end);
@@ -94,7 +96,7 @@ function MergeMarkdown:Parse()
 end
 
 function MergeMarkdown:AddContent(url_, o)
-	local text = self:GetWikiContent(url_);
+	local text = self:GetWikiContent(url_) or self:GetWikiContent(url_, "keepwork");
 	if(text) then
 		for line in text:gmatch("([^\r\n]*)\r?\n?") do
 			local inline = line:match("^<<(.*)")
@@ -113,6 +115,8 @@ function MergeMarkdown:AddContent(url_, o)
 				o[#o+1] = line;
 			end
 		end
+	else
+		LOG.std(nil, "error", "MergeMarkdown", "%s failed to add content", url_)
 	end
 end
 
