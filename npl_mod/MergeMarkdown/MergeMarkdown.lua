@@ -18,6 +18,8 @@ pandoc -s -o doc.docx MergedMarkdown.md
 pandoc -s -o doc.pdf MergedMarkdown.md
 ```
 
+If image name is `blank`, such as `![blank]()`, we will not rename the image
+
 use the lib:
 ------------------------------------------------------------
 local MergeMarkdown = NPL.load("MergeMarkdown");
@@ -27,6 +29,8 @@ local mmd = MergeMarkdown:new():Init("https://keepwork.com/lixizhi/lessons/books
 	isConvertToImage = true,
 	isRenameImageByNumber = true,
 	exportImageToFolder = false,
+	imageFormat = "ͼ %s",
+	imageIndexUseChapterPrefix = true,
 })
 
 -- example 2:
@@ -41,6 +45,13 @@ MergeMarkdown:Signal("finished")
 
 function MergeMarkdown:ctor()
 	self.files = {}
+	self.options = {
+		isConvertToImage = false,
+		isRenameImageByNumber = false,
+		exportImageToFolder = false,
+		imageFormat = "Figure %s",
+		imageIndexUseChapterPrefix = true,
+	}
 end
 
 --[[
@@ -53,7 +64,9 @@ end
 ]]
 function MergeMarkdown:Init(root_url, options)
 	self.root_url = root_url;
-	self.options = options or {}
+	if(options) then
+		commonlib.partialcopy(self.options, options);
+	end
 	self.co = coroutine.create(function()
 		self:Parse()
 		self:SaveAs();
@@ -73,6 +86,15 @@ end
 function MergeMarkdown:IsExportImageToFolder()
 	return self.options.exportImageToFolder;
 end
+
+function MergeMarkdown:IsImageIndexUseChapterPrefix()
+	return self.options.imageIndexUseChapterPrefix;
+end
+
+function MergeMarkdown:GetImageFormat()
+	return self.options.imageFormat;
+end
+
 
 -- @param address: like "/lixizhi/lessons/books/paracraft" or "https://keepwork.com/lixizhi/lessons/books/paracraft"
 -- @param repoPrefix: default to "", it can also be "keepwork" for older project. 
@@ -151,10 +173,10 @@ function MergeMarkdown:FetchImage(url, destDiskFilename)
 			else
 				LOG.std(nil, "warn", "MergeMarkdown", "%s failed to fetch image", url)
 			end
-			if(coroutine.status(self.co) == "suspended") then
+			hasResult = true;
+			if(self.co and coroutine.status(self.co) == "suspended") then
 				coroutine.resume(self.co, nil);
 			end
-			hasResult = true;
 		end);
 		if(not hasResult) then
 			self:Yield();
@@ -163,59 +185,112 @@ function MergeMarkdown:FetchImage(url, destDiskFilename)
 end
 
 
+function MergeMarkdown:ConvertBigFileToWikiImage(o)
+	local o2 = {}
+	local i=1;
+	while(i<=#o) do
+		local line = o[i];
+		if(line:match("^```@BigFile")) then
+			local url, name;
+			for k=1, 100 do
+				i = i + 1;
+				line = o[i];
+				if(line:match("^```")) then
+					break;
+				else
+					url = url or line:match("^%s*src:%s'?([^']+)'?");
+					if(url == ">-") then
+						url = nil;
+						i = i + 1;
+						line = o[i];
+						url = line:match("^%s*(%S+)");
+					end
+					name = name or line:match("^%s*filename:%s'?([^']+)'?");
+				end
+			end
+			if(url and name) then
+				o2[#o2+1] = format("![%s](%s)", name, url);	
+			end
+		else
+			o2[#o2+1] = line;
+		end
+		i = i + 1;
+	end
+	return o2;
+end
+
+function MergeMarkdown:RenameImages(o)
+	local exportImage = self:IsExportImageToFolder()
+	local useChapterPrefix = self:IsImageIndexUseChapterPrefix()
+	local images = {};
+	local imageFormat = self:GetImageFormat();
+	local imagePrefix = "";
+	local chapterImages = {};
+	chapterImages[imagePrefix] = 0;
+	for i=1, #o do 
+		local line = o[i];
+		if(useChapterPrefix) then
+			local chapterPrefix = line:match("^#+%s*([%d%.]+)%s+");
+			if(chapterPrefix) then
+				imagePrefix = chapterPrefix..".";
+				chapterImages[imagePrefix] = chapterImages[imagePrefix] or 0;
+			end
+		end
+
+		local name, url, text = line:match("^!%[([^%]]*)]%(([^%)]+)%)(.*)")
+		if(name and url) then
+			local image = {name=name, url=url};
+			images[#images+1] = image;
+
+			local imageName;
+			if(useChapterPrefix) then
+				chapterImages[imagePrefix] = chapterImages[imagePrefix] + 1;
+				imageName = format(imageFormat, imagePrefix..tostring(chapterImages[imagePrefix]));
+			else
+				imageName = format(imageFormat, string.format("%03d", #images));
+			end
+					
+			if(exportImage) then
+				local diskPath = imageName:match("[%d%.]+");
+				if(diskPath) then
+					diskPath = "image"..diskPath;
+					image.relativePath = self:GetImageRelativePath(url, diskPath)
+					url = image.relativePath;
+				end
+			end
+			if(name == "blank") then
+				imageName = "";
+			end
+			o[i] = string.format("![%s](%s)%s", imageName, url, text);	
+		end
+	end
+	LOG.std(nil, "info", "MergeMarkdown", "%s total images", #images)
+	return o, images;
+end
+
+
+function MergeMarkdown:NormalizeLines(o)
+	for i=1, #o do 
+		local line = o[i];
+		if(line:match("^%-%-%-[%-.]*%s*$")) then
+			o[i] = "----";
+		end
+	end
+	return o;
+end
+
 -- private: 
 function MergeMarkdown:Parse()
 	local o = {};
 	self:AddContent(self.root_url, o)
 
 	if(self:IsConvertBigFileToWikiImage()) then
-		local o2 = {}
-		local i=1;
-		while(i<=#o) do
-			local line = o[i];
-			if(line:match("^```@BigFile")) then
-				local url, name;
-				for k=1, 100 do
-					i = i + 1;
-					line = o[i];
-					if(line:match("^```")) then
-						break;
-					else
-						url = url or line:match("^%s*src:%s'?([^']+)'?");
-						name = name or line:match("^%s*filename:%s'?([^']+)'?");
-					end
-				end
-				if(url and name) then
-					o2[#o2+1] = format("![%s](%s)", name, url);	
-				end
-			else
-				o2[#o2+1] = line;
-			end
-			i = i + 1;
-		end
-		o = o2;
+		o = self:ConvertBigFileToWikiImage(o)
 	end
 	if(self:IsRenameImageByNumber()) then
-		local exportImage = self:IsExportImageToFolder()
-		
-		local images = {};
-		for i=1, #o do 
-			local line = o[i];
-			local name, url, text = line:match("^!%[([^%]]*)]%(([^%)]+)%)(.*)")
-			if(name and url) then
-				local image = {name=name, url=url};
-				images[#images+1] = image;
-				local name = string.format("image%03d", #images);
-				if(exportImage) then
-					image.relativePath = self:GetImageRelativePath(url, name)
-					url = image.relativePath;
-				end
-				o[i] = string.format("![%s](%s)%s", name, url, text);	
-			end
-		end
-		self.images = images;
-		LOG.std(nil, "info", "MergeMarkdown", "%s total images", #images)
+		o, self.images = self:RenameImages(o);
 	end
+	o = self:NormalizeLines(o);
 
 	self.output = table.concat(o, "\n");
 end
@@ -258,10 +333,17 @@ function MergeMarkdown:SaveAs(filename)
 		if(self:IsExportImageToFolder() and self.images) then
 			local parentDir = filename:gsub("[^/\\]+$", "")
 			local imageFolder = parentDir..self.imageFolder
+			LOG.std(nil, "info", "MergeMarkdown", "clear folder %s", imageFolder)
 			ParaIO.CreateDirectory(imageFolder);
 			ParaIO.DeleteFile(imageFolder.."*.*")
-			for _, image in ipairs(self.images) do
-				self:FetchImage(image.url, parentDir..image.relativePath);
+			for i=1, #(self.images) do
+				local image = self.images[i];
+				
+				if(image.relativePath) then
+					local deskFile = parentDir..image.relativePath;
+					LOG.std(nil, "info", "MergeMarkdown", "fetching image %d: %s", i, image.url)
+					self:FetchImage(image.url, deskFile);
+				end
 			end
 		end
 	end
